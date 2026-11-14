@@ -5,6 +5,7 @@ import { LAYOUTS, type Layout } from './layout';
 import { AVAILABLE_REWARDS, goldAtDepth, rollDoorRewards, type Reward } from './reward';
 import type { Rng } from './rng';
 import { DOOR_COLUMNS, REWARD, RUN } from './tuning';
+import { applyPermanentUpgrades, goldWithGoldSense, type PermanentUpgradeLevels } from './upgrade';
 
 /** The Boss Room sits one Depth past the last Room of the chain. */
 export const BOSS_DEPTH = RUN.rooms + 1;
@@ -44,10 +45,12 @@ export interface RunSummary {
   readonly goldBanked: number;
   /** All the player's banked Gold, this Run included. */
   readonly totalGold: number;
+  /** True if the player left the Run before it was over. */
+  readonly abandoned: boolean;
 }
 
 export interface RunOptions {
-  /** Where Gold is Banked. It is shared by every Run. */
+  /** Where Gold is Banked, and which Permanent Upgrades are owned. It is shared by every Run. */
   readonly bank: Bank;
   readonly rng: Rng;
   /** The Rewards that can appear behind Doors. */
@@ -98,11 +101,13 @@ export class Run {
   /** The Boons taken during this Run. They are lost when it ends. */
   readonly boons = new Boons();
   /** The Hero for this Run. Health carries from Room to Room. */
-  readonly hero = new HeroState(() => this.combat);
+  readonly hero: HeroState;
   /** The source of all randomness in this Run. */
   readonly rng: Rng;
 
   private readonly bank: Bank;
+  /** Permanent Upgrades are bought only between Runs, so a Run reads them once, at its start. */
+  private readonly upgrades: PermanentUpgradeLevels;
   private readonly rewards: readonly Reward[];
   private readonly layouts: readonly Layout[];
 
@@ -112,9 +117,12 @@ export class Run {
   private result: RunOutcome = 'underway';
   private banked = 0;
   private offer: readonly BoonOffer[] | null = null;
+  private abandoned = false;
 
   constructor(options: RunOptions) {
     this.bank = options.bank;
+    this.upgrades = options.bank.upgradeLevels;
+    this.hero = new HeroState(() => this.combat);
     this.rng = options.rng;
     this.rewards = options.rewards ?? AVAILABLE_REWARDS;
     this.layouts = options.layouts ?? LAYOUTS;
@@ -124,9 +132,9 @@ export class Run {
     this.exits = this.rollDoors();
   }
 
-  /** The Hero's combat numbers with this Run's Boons applied. */
+  /** The Hero's combat numbers: Permanent Upgrades first, then this Run's Boons on top. */
   get combat(): CombatNumbers {
-    return this.boons.apply(baseCombatNumbers());
+    return this.boons.apply(applyPermanentUpgrades(this.upgrades, baseCombatNumbers()));
   }
 
   /** The Room the Hero is in. */
@@ -190,6 +198,7 @@ export class Run {
       depthReached: this.depth,
       goldBanked: this.banked,
       totalGold: this.bank.gold,
+      abandoned: this.abandoned,
     };
   }
 
@@ -207,13 +216,13 @@ export class Run {
     const { reward, depth, isBossRoom } = this.current;
     let gold = 0;
     let health = 0;
-    if (reward === 'gold') gold = goldAtDepth(depth);
+    if (reward === 'gold') gold = this.goldReward(depth);
     if (reward === 'healing') health = this.hero.health.heal(REWARD.healing);
     if (reward === 'boon') {
       const offer = this.boons.rollOffer(this.rng);
       // With every Boon at its highest level there is nothing to offer, so the Room pays Gold.
       if (offer.length > 0) this.offer = offer;
-      else gold = goldAtDepth(depth);
+      else gold = this.goldReward(depth);
     }
     if (isBossRoom) gold += REWARD.bossRoomGold;
 
@@ -229,6 +238,16 @@ export class Run {
   /** Call when the Hero's health reaches zero. Death ends the Run for good. */
   heroDied(): void {
     if (this.result === 'underway') this.result = 'death';
+  }
+
+  /**
+   * The player leaves the Run before it is over. It ends as if the Hero had
+   * died: Gold already Banked is kept, and the Run cannot be resumed.
+   */
+  abandon(): void {
+    if (this.result !== 'underway') return;
+    this.result = 'death';
+    this.abandoned = true;
   }
 
   /** The Hero walks into one of the open Doors and the next Room begins. */
@@ -252,6 +271,11 @@ export class Run {
     return doors.map((door) =>
       door.leadsTo.reward === 'healing' ? { ...door, leadsTo: { ...door.leadsTo, reward: spare } } : door,
     );
+  }
+
+  /** A Gold Reward at this Depth, with Gold Sense applied. */
+  private goldReward(depth: number): number {
+    return goldWithGoldSense(goldAtDepth(depth), this.upgrades.goldSense);
   }
 
   private planRoom(depth: number, reward: Reward | null, previous: Layout | undefined): RoomPlan {

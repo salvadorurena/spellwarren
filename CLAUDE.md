@@ -15,7 +15,7 @@ npm run build      # typecheck + production build into dist/
 
 **Never run `npm run deploy` unless asked.** It force-pushes a fresh build to the `gh-pages` branch, which is the public game.
 
-Before calling a change done, run `npm test` and `npm run typecheck`. For anything visible, also play it in the preview: start a Run, clear a Room and pick a Door.
+Before calling a change done, run `npm test` and `npm run typecheck`. For anything visible, also play it in the preview: start a Run from the Menu, clear a Room and pick a Door. The preview keeps its save in `localStorage` under `spellwarren-save`, so reset progress afterwards if you gave yourself Gold. When the preview pane is hidden the game runs at about one frame a second; from the console, `game.step(time, delta)` moves it on.
 
 ## Layout
 
@@ -27,12 +27,17 @@ Before calling a change done, run `npm test` and `npm run typecheck`. For anythi
   - `flow.ts`: the flow field enemies use to path round walls, plus grid helpers (`cellAt`, `isWall`, `lineIsClear`).
   - `layout.ts`: the hand-designed Layouts.
   - `boon.ts`: the Boon pool, offers and how stacked Boons change `CombatNumbers`.
-  - `hero.ts`, `health.ts`, `reward.ts`, `bank.ts`, `rng.ts` (seeded mulberry32).
+  - `upgrade.ts`: the Permanent Upgrades, their prices, how they change `CombatNumbers` (before Boons) and Gold Sense.
+  - `bank.ts`: everything kept between Runs (Gold and Permanent Upgrade levels), with buying and reset. It is the one object that is saved, and it announces every change.
+  - `save.ts`: the Bank to and from text, with a version number. A missing or damaged save is a fresh start.
+  - `hero.ts`, `health.ts`, `reward.ts`, `rng.ts` (seeded mulberry32).
 - `src/scenes/`: Phaser only, for drawing, input, physics and sound. Scenes ask `rules/` what happens and draw it.
-  - `BootScene`: loads `public/assets/tiles.png` (16px tile sheet), draws the bolt and shot textures in code, and creates the `Bank` in the game registry.
-  - `RoomScene`: the play scene and the biggest file. It owns the `Run`, which it seeds with `Date.now()`.
+  - `BootScene`: loads `public/assets/tiles.png` (16px tile sheet), draws the bolt and shot textures in code, opens the saved `Bank` into the game registry and starts the Menu.
+  - `MenuScene`: start a Run, open the Shop, reset progress (R twice). `ShopScene`: six cards, bought by click or 1 to 6. Both draw `backdrop.ts` behind them.
+  - `RoomScene`: the play scene and the biggest file. It owns the `Run`, which it seeds with `Date.now()`. Esc pauses it to ask about Abandoning; its clock (`now`) leaves paused time out, so use it rather than `this.time.now`.
   - `HudScene`: the HUD, the Boon cards and the Run summary. It reads a `HudSnapshot` from the Room each frame and sends `BOON_CHOSEN_EVENT` back.
-- `src/view.ts`: the glue between rules and drawing: sprite frame numbers (`FRAME`), how things look (`ENEMY_LOOK`, `BOON_FRAME`, `REWARD_LOOK`), screen size (`VIEW_SCALE = 3`), colours, and the `HudSnapshot` / registry / event keys.
+- `src/view.ts`: the glue between rules and drawing: sprite frame numbers (`FRAME`), how things look (`ENEMY_LOOK`, `BOON_FRAME`, `PERMANENT_UPGRADE_FRAME`, `REWARD_LOOK`, `TEXT_STYLE`), screen size (`VIEW_SCALE = 3`), colours, and the `HudSnapshot` / registry / event keys.
+- `src/storage.ts`: the only code that touches `localStorage`. It saves the Bank after every change and copes with storage being unavailable.
 
 ## Conventions
 
@@ -52,7 +57,7 @@ The game is built in five playable steps, and each one is published. After each 
 1. ~~One Room: the Hero moves, fires bolts, Dodges and fights one kind of enemy.~~ Done.
 2. ~~A chain of Rooms with Doors and Rewards.~~ Done.
 3. ~~Boons and the other three kinds of enemy.~~ Done.
-4. **Next:** a menu, the Shop with Permanent Upgrades, spending Gold, and saving the `Bank` to the browser. The `Bank` is in memory only for now, and `bank.ts` is the one object to save.
-5. The real Boss (the Boss Room is a stand-in for now), sound, music and polish.
+4. ~~A menu, the Shop with Permanent Upgrades, spending Gold, and saving the `Bank` to the browser.~~ Done.
+5. **Next:** the real Boss (the Boss Room is a stand-in for now), sound, music (with the volume and mute settings) and polish.
 
 **Not in version one:** touch or gamepad controls, anything online (no backend; see ADR 0001), more than one Hero or weapon, an endless mode, difficulty settings, resuming a Run, and usage tracking. The only settings will be volume, mute and resetting progress.

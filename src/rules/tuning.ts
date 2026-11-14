@@ -135,6 +135,23 @@ export const REWARD = {
 } as const;
 
 /**
+ * Permanent Upgrades, bought in the Shop between Runs. Each is weaker than
+ * the matching Boon, so the Boons taken still decide how a Run goes. The
+ * numbers below are what one level adds.
+ */
+export const PERMANENT_UPGRADE = {
+  /** The price of each level in turn; there are as many levels as prices. */
+  prices: [30, 70, 140],
+  toughness: { maxHealth: 1 },
+  sharperBolts: { damage: 2 },
+  practisedCasting: { cooldownMultiplier: 0.94 },
+  lightStep: { speedMultiplier: 0.05 },
+  steadyBreath: { recoveryMultiplier: 0.92 },
+  /** Extra share of every Gold Reward. */
+  goldSense: { goldMultiplier: 0.15 },
+} as const;
+
+/**
  * Boons. Every Boon has the same number of levels; the numbers below are
  * what one level adds.
  */

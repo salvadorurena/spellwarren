@@ -6,23 +6,14 @@ import {
   BOON_CHOSEN_EVENT,
   BOON_COLOUR,
   BOON_FRAME,
-  FONT_FAMILY,
   FRAME,
   GOLD_COLOUR,
   HUD_KEY,
   SCREEN_HEIGHT,
   SCREEN_WIDTH,
+  TEXT_STYLE,
   type HudSnapshot,
 } from '../view';
-
-const TEXT_STYLE: Phaser.Types.GameObjects.Text.TextStyle = {
-  fontFamily: FONT_FAMILY,
-  fontStyle: 'bold',
-  fontSize: '26px',
-  color: '#f4e9d8',
-  stroke: '#2b1d14',
-  strokeThickness: 6,
-};
 
 const PIP = { size: 24, gap: 6, left: 24, top: 22 };
 const DODGE_BAR_TOP = PIP.top + PIP.size + 12;
@@ -32,7 +23,7 @@ const PANEL = { width: 620, height: 330 };
 const CARD = { width: 320, height: 350, gap: 34 };
 const CARD_KEYS = ['ONE', 'TWO', 'THREE'] as const;
 
-const HINT_CONTROLS = 'W A S D move   ·   Mouse aim   ·   Hold click to fire   ·   Space to Dodge';
+const HINT_CONTROLS = 'W A S D move   ·   Mouse aim   ·   Hold click to fire   ·   Space to Dodge   ·   Esc to leave';
 const HINT_DOORS = 'Walk into a Door to choose the next Room and its Reward';
 const HINT_BOSS_DOOR = 'Walk into the Door to face the Boss Room';
 
@@ -47,6 +38,8 @@ export class HudScene extends Phaser.Scene {
   private summaryTitle!: Phaser.GameObjects.Text;
   private summaryBody!: Phaser.GameObjects.Text;
   private summaryPrompt!: Phaser.GameObjects.Text;
+  /** The question asked when Esc is pressed during a Run. */
+  private abandonObjects: (Phaser.GameObjects.Graphics | Phaser.GameObjects.Text)[] = [];
   /** The offer whose cards are on screen, and everything drawn for it. */
   private shownOffer: readonly BoonOffer[] | null = null;
   private offerObjects: Phaser.GameObjects.GameObject[] = [];
@@ -104,8 +97,24 @@ export class HudScene extends Phaser.Scene {
       .text(centreX, centreY + 14, '', { ...TEXT_STYLE, align: 'center', lineSpacing: 8 })
       .setOrigin(0.5);
     this.summaryPrompt = this.add
-      .text(centreX, top + PANEL.height - 44, 'Press Enter for a new Run', { ...TEXT_STYLE, fontSize: '22px' })
+      .text(centreX, top + PANEL.height - 44, 'Press Enter to return to the menu', { ...TEXT_STYLE, fontSize: '22px' })
       .setOrigin(0.5);
+
+    const ask = this.add.graphics();
+    ask.fillStyle(0x1a1410, 0.6).fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+    ask.fillStyle(0x2b1d14, 0.95).fillRoundedRect(centreX - 300, centreY - 110, 600, 220, 18);
+    ask.lineStyle(4, 0x8a6a4a).strokeRoundedRect(centreX - 300, centreY - 110, 600, 220, 18);
+    const question = this.add
+      .text(centreX, centreY - 50, 'Abandon this Run?', { ...TEXT_STYLE, fontSize: '40px' })
+      .setOrigin(0.5);
+    const detail = this.add
+      .text(centreX, centreY + 4, 'Gold already Banked is kept.', { ...TEXT_STYLE, fontSize: '21px', fontStyle: 'normal', strokeThickness: 4 })
+      .setOrigin(0.5);
+    const keys = this.add
+      .text(centreX, centreY + 56, 'Enter to leave   ·   Esc to keep playing', { ...TEXT_STYLE, fontSize: '22px', color: '#c9b79c' })
+      .setOrigin(0.5);
+    this.abandonObjects = [ask, question, detail, keys];
+    for (const object of this.abandonObjects) object.setVisible(false);
   }
 
   update(): void {
@@ -119,6 +128,7 @@ export class HudScene extends Phaser.Scene {
     // The hint moves up once the row of held Boons is long enough to reach it.
     this.hint.setText(hintFor(hud)).setY(SCREEN_HEIGHT - (hud.boons.length > 5 ? 82 : 20));
     this.showSummary(hud.summary, hud.roomCount);
+    for (const object of this.abandonObjects) object.setVisible(hud.askingToAbandon);
     this.showHeldBoons(hud.boons);
     this.showBoonOffer(hud.boonOffer);
   }
@@ -226,7 +236,8 @@ export class HudScene extends Phaser.Scene {
 
     const won = summary.outcome === 'victory';
     const reachedBoss = summary.depthReached > roomCount;
-    this.summaryTitle.setText(won ? 'Victory!' : 'You died').setColor(won ? GOLD_COLOUR : '#ff8a8a');
+    const title = won ? 'Victory!' : summary.abandoned ? 'Run abandoned' : 'You died';
+    this.summaryTitle.setText(title).setColor(won ? GOLD_COLOUR : '#ff8a8a');
     this.summaryBody.setText(
       [
         `Depth reached: ${summary.depthReached}${reachedBoss ? ' (Boss Room)' : ''}`,
@@ -261,7 +272,7 @@ function enemiesLabel(enemiesLeft: number): string {
 }
 
 function hintFor(hud: HudSnapshot): string {
-  if (hud.summary || hud.boonOffer) return '';
+  if (hud.summary || hud.boonOffer || hud.askingToAbandon) return '';
   if (hud.doorsOpen) return doorHint(hud);
   if (hud.depth === 1 && hud.enemiesLeft > 0 && hud.health > 0) return HINT_CONTROLS;
   return '';

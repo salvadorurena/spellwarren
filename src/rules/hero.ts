@@ -10,7 +10,7 @@ export type HitResult = 'ignored' | 'hurt' | 'dead';
  * time in milliseconds.
  */
 export class HeroState {
-  readonly health = new Health(HERO.maxHealth);
+  readonly health: Health;
 
   private graceEndsAt = -Infinity;
   private dodgeEndsAt = -Infinity;
@@ -19,9 +19,12 @@ export class HeroState {
 
   /**
    * @param numbers Reads the Hero's current combat numbers, which change
-   *   during a Run as Boons are taken.
+   *   during a Run as Boons are taken. Maximum health is read once, at the
+   *   start, because only Permanent Upgrades change it.
    */
-  constructor(private readonly numbers: () => CombatNumbers = baseCombatNumbers) {}
+  constructor(private readonly numbers: () => CombatNumbers = baseCombatNumbers) {
+    this.health = new Health(numbers().maxHealth);
+  }
 
   /** The Hero's combat numbers right now. */
   get combat(): CombatNumbers {

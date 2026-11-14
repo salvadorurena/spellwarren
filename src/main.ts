@@ -1,7 +1,9 @@
 import Phaser from 'phaser';
 import { BootScene } from './scenes/BootScene';
 import { HudScene } from './scenes/HudScene';
+import { MenuScene } from './scenes/MenuScene';
 import { RoomScene } from './scenes/RoomScene';
+import { ShopScene } from './scenes/ShopScene';
 import { SCREEN_HEIGHT, SCREEN_WIDTH } from './view';
 
 const game = new Phaser.Game({
@@ -20,7 +22,7 @@ const game = new Phaser.Game({
     default: 'arcade',
     arcade: { gravity: { x: 0, y: 0 } },
   },
-  scene: [BootScene, RoomScene, HudScene],
+  scene: [BootScene, MenuScene, ShopScene, RoomScene, HudScene],
 });
 
 if (import.meta.env.DEV) {

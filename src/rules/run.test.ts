@@ -329,6 +329,7 @@ describe('the end of a Run', () => {
       depthReached: BOSS_DEPTH,
       goldBanked: before + REWARD.bossRoomGold,
       totalGold: before + REWARD.bossRoomGold,
+      abandoned: false,
     });
   });
 
@@ -348,7 +349,29 @@ describe('the end of a Run', () => {
       depthReached: 3,
       goldBanked: banked,
       totalGold: banked,
+      abandoned: false,
     });
+  });
+
+  it('ends as a death when abandoned, keeping the Gold already Banked', () => {
+    const bank = new Bank();
+    const run = startRun(2, bank);
+    advanceTo(run, 3);
+    const banked = bank.gold;
+
+    run.abandon();
+    expect(run.outcome).toBe('death');
+    expect(run.roomCleared()).toBeNull();
+    expect(bank.gold).toBe(banked);
+    expect(run.summary).toMatchObject({ outcome: 'death', depthReached: 3, abandoned: true });
+  });
+
+  it('cannot be abandoned once it is over', () => {
+    const run = startRun(11);
+    advanceTo(run, BOSS_DEPTH);
+    clearRoom(run);
+    run.abandon();
+    expect(run.summary).toMatchObject({ outcome: 'victory', abandoned: false });
   });
 
   it('stays victory once won', () => {

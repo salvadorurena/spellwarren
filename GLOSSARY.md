@@ -18,6 +18,10 @@ _Avoid_: Dash, roll, blink
 One attempt at the game, from a fresh start to either death or victory. Its Rooms and Rewards are procedurally varied, death ends it for good, and it cannot be resumed once left.
 _Avoid_: Game, session, playthrough, life
 
+**Abandoning**:
+Leaving a Run before it is over. It counts as the Hero's death: Gold already Banked is kept, and the Run is gone.
+_Avoid_: Quitting, forfeiting, retreating
+
 **Room**:
 One enclosed combat space within a Run, fitting entirely on one screen and made of a Layout and a group of enemies. A Run is a chain of Rooms ending in a Boss. A Room is cleared when all its enemies are defeated.
 _Avoid_: Level, stage, floor, map
@@ -96,12 +100,16 @@ _Avoid_: Coins, money, souls, currency
 ### Progression between Runs
 
 **Banking**:
-The moment Gold earned in a Room becomes permanently the player's, which happens when that Room is cleared. Banked Gold is never lost, whether the Run ends in death, victory, or a closed browser tab.
+The moment Gold earned in a Room becomes permanently the player's, which happens when that Room is cleared. Banked Gold is never lost, whether the Run ends in death, victory, Abandoning, or a closed browser tab. Only resetting progress forgets it.
 _Avoid_: Saving, cashing out
 
 **Permanent Upgrade**:
 An improvement bought with Gold between Runs that applies to every later Run, forever.
 _Avoid_: Upgrade, unlock, meta-upgrade, talent
+
+**Permanent Upgrade level**:
+How many times a Permanent Upgrade has been bought, which sets how strong it is. Each level costs more than the one before, and every Permanent Upgrade has the same highest level. Boons are applied on top of it.
+_Avoid_: Rank, tier
 
 **Shop**:
 The place between Runs where Gold is spent on Permanent Upgrades. There is no Shop inside a Run.

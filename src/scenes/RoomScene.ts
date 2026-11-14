@@ -99,6 +99,12 @@ export class RoomScene extends Phaser.Scene {
   /** True while the Hero is stepping through a Door. */
   private leaving = false;
   private summaryVisible = false;
+  /** True while the game is paused to ask whether to abandon the Run. */
+  private askingToAbandon = false;
+  /** When the current pause began, on the scene's clock. */
+  private pausedAt = 0;
+  /** All the time spent paused in this Room, which the Room's own clock leaves out. */
+  private pausedMs = 0;
   /** True while the Boon cards are on screen and the Room waits for a choice. */
   private choosingBoon = false;
   private wasDodging = false;
@@ -116,7 +122,7 @@ export class RoomScene extends Phaser.Scene {
   /** Warnings drawn on the floor, such as the line a charger is about to take. */
   private warnings!: Phaser.GameObjects.Graphics;
 
-  private keys!: Record<'up' | 'down' | 'left' | 'right' | 'dodge' | 'confirm', Phaser.Input.Keyboard.Key>;
+  private keys!: Record<'up' | 'down' | 'left' | 'right' | 'dodge', Phaser.Input.Keyboard.Key>;
   private dodgeDirection = new Phaser.Math.Vector2(1, 0);
 
   constructor() {
@@ -129,6 +135,9 @@ export class RoomScene extends Phaser.Scene {
     this.doorsReady = false;
     this.leaving = false;
     this.summaryVisible = false;
+    this.askingToAbandon = false;
+    this.pausedAt = 0;
+    this.pausedMs = 0;
     this.choosingBoon = false;
     this.wasDodging = false;
     this.enemyInfo.clear();
@@ -165,8 +174,15 @@ export class RoomScene extends Phaser.Scene {
       left: keyboard.addKey('A'),
       right: keyboard.addKey('D'),
       dodge: keyboard.addKey('SPACE'),
-      confirm: keyboard.addKey('ENTER'),
     };
+    // Enter and Esc answer questions, so they act on the press itself rather
+    // than being checked each frame, where a very quick tap could be missed.
+    keyboard.on('keydown-ENTER', (event: KeyboardEvent) => {
+      if (!event.repeat) this.enterPressed();
+    });
+    keyboard.on('keydown-ESC', (event: KeyboardEvent) => {
+      if (!event.repeat) this.escPressed();
+    });
 
     this.game.events.on(BOON_CHOSEN_EVENT, this.boonChosen, this);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
@@ -178,13 +194,23 @@ export class RoomScene extends Phaser.Scene {
     this.publishHud();
   }
 
-  update(): void {
-    const now = this.time.now;
+  /**
+   * The Room's clock in milliseconds. It stands still while the game is
+   * paused, so cooldowns and enemy timers carry on where they left off.
+   */
+  private get now(): number {
+    // Phaser's own clock keeps counting while paused, so stop at the moment the pause began.
+    const sceneNow = this.askingToAbandon ? this.pausedAt : this.time.now;
+    return sceneNow - this.pausedMs;
+  }
 
-    if (this.summaryVisible && Phaser.Input.Keyboard.JustDown(this.keys.confirm)) {
-      this.scene.restart({});
+  update(): void {
+    if (this.askingToAbandon) {
+      this.publishHud();
       return;
     }
+
+    const now = this.now;
 
     if (!this.leaving) {
       this.updateHero(now);
@@ -257,7 +283,7 @@ export class RoomScene extends Phaser.Scene {
   }
 
   private addEnemy(kind: EnemyKind, at: Point, fadeMs: number, parent: Sprite | null): Sprite {
-    const now = this.time.now;
+    const now = this.now;
     const look = ENEMY_LOOK[kind];
     const enemy = this.enemies.create(at.x, at.y, 'tiles', look.frame) as Sprite;
     enemy.setScale(look.scale).setCircle(5, 3, 5).setDepth(5).setAlpha(0);
@@ -348,14 +374,14 @@ export class RoomScene extends Phaser.Scene {
 
   private enemyTouchesHero(enemy: Sprite): void {
     const info = this.enemyInfo.get(enemy);
-    if (!info || this.time.now < info.activeAt) return;
+    if (!info || this.now < info.activeAt) return;
     this.hurtHero(info.brain.contactDamage);
   }
 
   /** Returns false if the Hero took nothing: mid-Dodge, in the grace period, or the fight is over. */
   private hurtHero(damage: number): boolean {
     if (damage <= 0 || this.room.outcome !== 'fighting') return false;
-    const result = this.heroState.takeHit(damage, this.time.now);
+    const result = this.heroState.takeHit(damage, this.now);
     if (result === 'ignored') return false;
 
     // Phaser multiplies shake by the camera zoom, so this is about 2 Room pixels.
@@ -424,7 +450,7 @@ export class RoomScene extends Phaser.Scene {
     const info = this.enemyInfo.get(enemy);
     if (!bolt.active || !bolted || !info || bolted.hit.has(enemy)) return;
 
-    const now = this.time.now;
+    const now = this.now;
     // Enemies that are still fading in stop a bolt but cannot be hurt.
     if (now < info.activeAt) {
       this.removeBolt(bolt);
@@ -449,7 +475,7 @@ export class RoomScene extends Phaser.Scene {
   /** Chain Spark: part of a hit's damage jumps to the nearest other enemy in range. */
   private chainSpark(from: Sprite, damage: number): void {
     const range = this.heroState.combat.chainRange;
-    const now = this.time.now;
+    const now = this.now;
     let nearest: Sprite | null = null;
     let nearestDistance = range;
     for (const [other, info] of this.enemyInfo) {
@@ -473,7 +499,7 @@ export class RoomScene extends Phaser.Scene {
     const info = this.enemyInfo.get(enemy);
     if (!info) return;
 
-    const now = this.time.now;
+    const now = this.now;
     info.brain.health.damage(amount);
     if (info.brain.health.isDead) {
       this.defeatEnemy(enemy);
@@ -654,7 +680,7 @@ export class RoomScene extends Phaser.Scene {
     } else if (this.run.boonOffer) {
       // The Doors stay shut until the player has chosen a Boon.
       this.time.delayedCall(BOON_OFFER_DELAY_MS, () => {
-        this.choosingBoon = true;
+        this.choosingBoon = this.run.outcome === 'underway';
       });
     } else {
       this.time.delayedCall(DOORS_OPEN_DELAY_MS, () => this.openDoors());
@@ -764,6 +790,56 @@ export class RoomScene extends Phaser.Scene {
     });
   }
 
+  // ---- Leaving a Run early -----------------------------------------------
+
+  /** Enter leaves the Run summary for the Menu, or confirms abandoning the Run. */
+  private enterPressed(): void {
+    if (this.summaryVisible) this.backToMenu();
+    else if (this.askingToAbandon) this.abandonRun();
+  }
+
+  /** Esc asks whether to abandon the Run, or takes the question back. */
+  private escPressed(): void {
+    if (this.askingToAbandon) this.unpause();
+    else if (this.canAbandon()) this.pause();
+  }
+
+  /** A Run can be left while it is being played, but not while a Boon is being chosen or a Door taken. */
+  private canAbandon(): boolean {
+    return this.run.outcome === 'underway' && !this.leaving && !this.choosingBoon;
+  }
+
+  /** Freezes the Room (physics, tweens, timers and its clock) while the question is on screen. */
+  private pause(): void {
+    this.askingToAbandon = true;
+    this.pausedAt = this.time.now;
+    this.physics.pause();
+    this.tweens.pauseAll();
+    this.time.paused = true;
+  }
+
+  private unpause(): void {
+    this.askingToAbandon = false;
+    this.pausedMs += this.time.now - this.pausedAt;
+    this.physics.resume();
+    this.tweens.resumeAll();
+    this.time.paused = false;
+  }
+
+  /** The Run ends here, as if the Hero had died; Gold already Banked is kept. */
+  private abandonRun(): void {
+    this.unpause();
+    this.room.heroDied();
+    this.run.abandon();
+    (this.hero.body as Body).setVelocity(0, 0);
+    this.summaryVisible = true;
+  }
+
+  private backToMenu(): void {
+    this.scene.stop('Hud');
+    this.scene.start('Menu');
+  }
+
   private showSummaryAfter(delayMs: number): void {
     this.time.delayedCall(delayMs, () => {
       this.summaryVisible = true;
@@ -792,7 +868,7 @@ export class RoomScene extends Phaser.Scene {
     const snapshot: HudSnapshot = {
       health: this.heroState.health.current,
       maxHealth: this.heroState.health.max,
-      dodgeReadiness: this.heroState.dodgeReadiness(this.time.now),
+      dodgeReadiness: this.heroState.dodgeReadiness(this.now),
       depth: this.run.depth,
       roomCount: RUN.rooms,
       isBossRoom: this.run.room.isBossRoom,
@@ -802,6 +878,7 @@ export class RoomScene extends Phaser.Scene {
       boons: this.run.boons.held,
       boonOffer: this.choosingBoon ? this.run.boonOffer : null,
       summary: this.summaryVisible ? this.run.summary : null,
+      askingToAbandon: this.askingToAbandon,
     };
     this.registry.set(HUD_KEY, snapshot);
   }

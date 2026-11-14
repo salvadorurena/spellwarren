@@ -45,6 +45,8 @@ export const BOON_INFO: Record<BoonId, BoonInfo> = {
  * Distances are in Room pixels, times in milliseconds.
  */
 export interface CombatNumbers {
+  /** The Hero's health at the start of a Run. */
+  readonly maxHealth: number;
   readonly heroSpeed: number;
   readonly dodgeRecoveryMs: number;
   readonly boltDamage: number;
@@ -72,9 +74,10 @@ export interface CombatNumbers {
   readonly dodgeBlastRadius: number;
 }
 
-/** The Hero's numbers with no Boons. */
+/** The Hero's numbers with no Boons and no Permanent Upgrades. */
 export function baseCombatNumbers(): CombatNumbers {
   return {
+    maxHealth: HERO.maxHealth,
     heroSpeed: HERO.speed,
     dodgeRecoveryMs: DODGE.recoveryMs,
     boltDamage: BOLT.damage,
