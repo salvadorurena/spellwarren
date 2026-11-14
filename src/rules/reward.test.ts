@@ -12,8 +12,8 @@ describe('Gold Rewards', () => {
 });
 
 describe('the Rewards behind a set of Doors', () => {
-  it('do not include Boons yet', () => {
-    expect([...AVAILABLE_REWARDS].sort()).toEqual(['gold', 'healing']);
+  it('can be any of the three kinds', () => {
+    expect([...AVAILABLE_REWARDS].sort()).toEqual(['boon', 'gold', 'healing']);
   });
 
   it('are exactly two different ones when two kinds are available', () => {

@@ -21,6 +21,11 @@ export class RoomState {
     return this.result;
   }
 
+  /** An enemy that appears during the fight must be defeated too. */
+  enemyAdded(): void {
+    if (this.result === 'fighting') this.enemies += 1;
+  }
+
   enemyDefeated(): void {
     if (this.result !== 'fighting') return;
     this.enemies = Math.max(0, this.enemies - 1);

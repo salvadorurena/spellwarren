@@ -1,15 +1,20 @@
 import Phaser from 'phaser';
+import { BOON_INFO, volleyAngles, type BoonId } from '../rules/boon';
 import { rollEncounter } from '../rules/encounter';
-import { Health } from '../rules/health';
+import { Enemy, type EnemyAction, type EnemyKind } from '../rules/enemy';
+import { cellAt, cellCentre, FlowField, isWall, lineIsClear, type Point } from '../rules/flow';
 import type { HeroState } from '../rules/hero';
 import type { Bank } from '../rules/bank';
 import type { Cell, Layout } from '../rules/layout';
 import { Rng } from '../rules/rng';
 import { RoomState } from '../rules/room';
 import { Run, type Door, type RewardGrant } from '../rules/run';
-import { BOLT, DODGE, HERO, RUN, RUSHER, TILE } from '../rules/tuning';
+import { CHARGER, DODGE, RUN, SHOOTER, TILE } from '../rules/tuning';
 import {
   BANK_KEY,
+  BOON_CHOSEN_EVENT,
+  BOON_COLOUR,
+  ENEMY_LOOK,
   FONT_FAMILY,
   FRAME,
   GOLD_COLOUR,
@@ -31,18 +36,46 @@ export interface RoomSceneData {
 }
 
 interface EnemyInfo {
-  health: Health;
+  brain: Enemy;
   /** Enemies fade in and cannot move or hurt until this time. */
   activeAt: number;
   /** While knocked back, an enemy does not steer. */
-  stunnedUntil: number;
-  /** Which way this enemy prefers to go around an obstacle: 1 or -1. */
-  side: number;
+  knockedUntil: number;
+  /** An enemy flashes white until this time after being hit. */
+  flashUntil: number;
+  /** The spawner that made this spawnling, if any. */
+  parent: Sprite | null;
+}
+
+interface BoltInfo {
+  expiresAt: number;
+  damage: number;
+  /** How many more enemies this bolt passes through. */
+  pierceLeft: number;
+  /** How many more walls this bolt bounces off. */
+  bouncesLeft: number;
+  /** Enemies this bolt has already hit, so a piercing bolt hits each once. */
+  hit: Set<Sprite>;
 }
 
 const SPAWN_FADE_MS = 700;
+/** A spawnling appears faster than the enemies a Room starts with. */
+const SPAWNLING_FADE_MS = 350;
 const KNOCKBACK_MS = 110;
 const KNOCKBACK_SPEED = 130;
+const HIT_FLASH_MS = 70;
+/** Only small enemies are pushed back by a bolt. */
+const PUSHED_BY_BOLTS: Record<EnemyKind, boolean> = {
+  rusher: true,
+  spawnling: true,
+  shooter: true,
+  charger: false,
+  spawner: false,
+};
+/** How wide an enemy is, when checking that it can walk a straight line. */
+const ENEMY_HALF_WIDTH = 6;
+/** After a Boon Room is cleared, the choice of Boons appears this long afterwards. */
+const BOON_OFFER_DELAY_MS = 600;
 
 /** After a Room is cleared its Reward is shown for this long before the Doors open. */
 const DOORS_OPEN_DELAY_MS = 700;
@@ -66,13 +99,22 @@ export class RoomScene extends Phaser.Scene {
   /** True while the Hero is stepping through a Door. */
   private leaving = false;
   private summaryVisible = false;
+  /** True while the Boon cards are on screen and the Room waits for a choice. */
+  private choosingBoon = false;
+  private wasDodging = false;
 
   private hero!: Sprite;
   private walls!: Phaser.Tilemaps.TilemapLayer;
   private enemies!: Phaser.Physics.Arcade.Group;
   private bolts!: Phaser.Physics.Arcade.Group;
+  private shots!: Phaser.Physics.Arcade.Group;
   private enemyInfo = new Map<Sprite, EnemyInfo>();
-  private boltExpiry = new Map<Bolt, number>();
+  private boltInfo = new Map<Bolt, BoltInfo>();
+  private shotExpiry = new Map<Bolt, number>();
+  private layout!: Layout;
+  private flow!: FlowField;
+  /** Warnings drawn on the floor, such as the line a charger is about to take. */
+  private warnings!: Phaser.GameObjects.Graphics;
 
   private keys!: Record<'up' | 'down' | 'left' | 'right' | 'dodge' | 'confirm', Phaser.Input.Keyboard.Key>;
   private dodgeDirection = new Phaser.Math.Vector2(1, 0);
@@ -87,8 +129,11 @@ export class RoomScene extends Phaser.Scene {
     this.doorsReady = false;
     this.leaving = false;
     this.summaryVisible = false;
+    this.choosingBoon = false;
+    this.wasDodging = false;
     this.enemyInfo.clear();
-    this.boltExpiry.clear();
+    this.boltInfo.clear();
+    this.shotExpiry.clear();
   }
 
   /** A new Run: Depth 1 and full health, with the banked Gold of every Run before it. */
@@ -100,12 +145,15 @@ export class RoomScene extends Phaser.Scene {
   create(): void {
     const layout = this.run.room.layout;
     const rng = this.run.rng;
+    this.layout = layout;
+    this.flow = new FlowField(layout);
 
     this.cameras.main.setZoom(VIEW_SCALE).centerOn(ROOM_WIDTH / 2, ROOM_HEIGHT / 2);
     this.cameras.main.fadeIn(ENTER_FADE_MS);
     this.input.mouse?.disableContextMenu();
 
     this.buildWalls(layout, rng);
+    this.warnings = this.add.graphics().setDepth(2);
     this.createHero(layout.heroStart);
     this.createBolts();
     this.createEnemies(layout, rng);
@@ -119,6 +167,11 @@ export class RoomScene extends Phaser.Scene {
       dodge: keyboard.addKey('SPACE'),
       confirm: keyboard.addKey('ENTER'),
     };
+
+    this.game.events.on(BOON_CHOSEN_EVENT, this.boonChosen, this);
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.game.events.off(BOON_CHOSEN_EVENT, this.boonChosen, this);
+    });
 
     if (!this.scene.isActive('Hud')) this.scene.launch('Hud');
     if (this.room.outcome === 'cleared') this.roomCleared();
@@ -138,6 +191,7 @@ export class RoomScene extends Phaser.Scene {
       this.checkDoors();
     }
     this.updateBolts(now);
+    this.updateShots(now);
     this.updateEnemies(now);
     this.publishHud();
   }
@@ -176,7 +230,11 @@ export class RoomScene extends Phaser.Scene {
 
   private createBolts(): void {
     this.bolts = this.physics.add.group({ classType: Phaser.Physics.Arcade.Image });
-    this.physics.add.collider(this.bolts, this.walls, (bolt) => this.removeBolt(bolt as Bolt));
+    this.physics.add.collider(this.bolts, this.walls, (bolt) => this.boltHitsWall(bolt as Bolt));
+
+    this.shots = this.physics.add.group({ classType: Phaser.Physics.Arcade.Image });
+    this.physics.add.collider(this.shots, this.walls, (shot) => this.removeShot(shot as Bolt));
+    this.physics.add.overlap(this.hero, this.shots, (_hero, shot) => this.shotHitsHero(shot as Bolt));
   }
 
   private createEnemies(layout: Layout, rng: Rng): void {
@@ -184,18 +242,8 @@ export class RoomScene extends Phaser.Scene {
     this.room = new RoomState(spawns.length);
     this.enemies = this.physics.add.group();
 
-    const now = this.time.now;
     for (const spawn of spawns) {
-      const { x, y } = cellCentre(spawn.cell);
-      const enemy = this.enemies.create(x, y, 'tiles', FRAME.rusher) as Sprite;
-      enemy.setCircle(5, 3, 5).setDepth(5).setAlpha(0);
-      this.tweens.add({ targets: enemy, alpha: 1, duration: SPAWN_FADE_MS });
-      this.enemyInfo.set(enemy, {
-        health: new Health(RUSHER.health),
-        activeAt: now + SPAWN_FADE_MS,
-        stunnedUntil: 0,
-        side: rng.next() < 0.5 ? 1 : -1,
-      });
+      this.addEnemy(spawn.kind, cellCentre(spawn.cell), SPAWN_FADE_MS, null);
     }
 
     this.physics.add.collider(this.enemies, this.walls);
@@ -208,15 +256,32 @@ export class RoomScene extends Phaser.Scene {
     );
   }
 
+  private addEnemy(kind: EnemyKind, at: Point, fadeMs: number, parent: Sprite | null): Sprite {
+    const now = this.time.now;
+    const look = ENEMY_LOOK[kind];
+    const enemy = this.enemies.create(at.x, at.y, 'tiles', look.frame) as Sprite;
+    enemy.setScale(look.scale).setCircle(5, 3, 5).setDepth(5).setAlpha(0);
+    this.tweens.add({ targets: enemy, alpha: 1, duration: fadeMs });
+    this.enemyInfo.set(enemy, {
+      brain: new Enemy(kind, now + fadeMs, this.run.rng),
+      activeAt: now + fadeMs,
+      knockedUntil: 0,
+      flashUntil: 0,
+      parent,
+    });
+    return enemy;
+  }
+
   // ---- The Hero ------------------------------------------------------------
 
   private updateHero(now: number): void {
     const body = this.hero.body as Body;
-    if (this.heroState.health.isDead) {
+    if (this.heroState.health.isDead || this.choosingBoon) {
       body.setVelocity(0, 0);
       return;
     }
 
+    const combat = this.heroState.combat;
     const aim = this.aimDirection();
     this.hero.setFlipX(aim.x < 0);
 
@@ -230,18 +295,36 @@ export class RoomScene extends Phaser.Scene {
       this.dodgeDirection.copy(move.lengthSq() > 0 ? move : aim);
     }
 
-    if (this.heroState.isDodging(now)) {
-      const speed = HERO.speed * DODGE.speedMultiplier;
+    const dodging = this.heroState.isDodging(now);
+    if (dodging) {
+      const speed = combat.heroSpeed * DODGE.speedMultiplier;
       body.setVelocity(this.dodgeDirection.x * speed, this.dodgeDirection.y * speed);
     } else {
-      body.setVelocity(move.x * HERO.speed, move.y * HERO.speed);
+      body.setVelocity(move.x * combat.heroSpeed, move.y * combat.heroSpeed);
     }
+    if (this.wasDodging && !dodging && combat.dodgeBlastDamage > 0) this.dodgeBlast();
+    this.wasDodging = dodging;
 
     if (this.input.activePointer.isDown && this.heroState.tryFire(now)) {
-      this.fireBolt(aim, now);
+      this.fireVolley(aim, now);
     }
 
     this.showHeroState(now);
+  }
+
+  /** Dodge Blast: a ring bursts from the Hero and damages every enemy inside it. */
+  private dodgeBlast(): void {
+    const { dodgeBlastDamage, dodgeBlastRadius } = this.heroState.combat;
+    const ring = this.add.circle(this.hero.x, this.hero.y, dodgeBlastRadius).setDepth(4);
+    ring.setStrokeStyle(2, 0x9be7ff, 0.9).setFillStyle(0x9be7ff, 0.18).setScale(0.2);
+    this.tweens.add({ targets: ring, scale: 1, alpha: 0, duration: 260, onComplete: () => ring.destroy() });
+
+    for (const enemy of [...this.enemyInfo.keys()]) {
+      const reach = dodgeBlastRadius + enemy.displayWidth / 3;
+      if (Phaser.Math.Distance.Between(this.hero.x, this.hero.y, enemy.x, enemy.y) <= reach) {
+        this.damageEnemy(enemy, dodgeBlastDamage, null);
+      }
+    }
   }
 
   private aimDirection(): Phaser.Math.Vector2 {
@@ -264,12 +347,16 @@ export class RoomScene extends Phaser.Scene {
   }
 
   private enemyTouchesHero(enemy: Sprite): void {
-    const now = this.time.now;
     const info = this.enemyInfo.get(enemy);
-    if (!info || now < info.activeAt || this.room.outcome !== 'fighting') return;
+    if (!info || this.time.now < info.activeAt) return;
+    this.hurtHero(info.brain.contactDamage);
+  }
 
-    const result = this.heroState.takeHit(RUSHER.contactDamage, now);
-    if (result === 'ignored') return;
+  /** Returns false if the Hero took nothing: mid-Dodge, in the grace period, or the fight is over. */
+  private hurtHero(damage: number): boolean {
+    if (damage <= 0 || this.room.outcome !== 'fighting') return false;
+    const result = this.heroState.takeHit(damage, this.time.now);
+    if (result === 'ignored') return false;
 
     // Phaser multiplies shake by the camera zoom, so this is about 2 Room pixels.
     this.cameras.main.shake(140, 0.0015);
@@ -280,103 +367,271 @@ export class RoomScene extends Phaser.Scene {
       this.hero.setTint(0x555555).setTintMode(Phaser.TintModes.MULTIPLY).setAlpha(1);
       this.hero.setAngle(90);
     }
+    return true;
   }
 
   // ---- Bolts -------------------------------------------------------------
 
-  private fireBolt(direction: Phaser.Math.Vector2, now: number): void {
-    // Bolts start at the Hero's centre, so an enemy pressed right up against
-    // the Hero is still hit rather than skipped over.
-    const x = this.hero.x;
-    const y = this.hero.y;
-    const bolt = this.bolts.get(x, y, 'bolt') as Bolt | null;
-    if (!bolt) return;
-    bolt.enableBody(true, x, y, true, true);
-    bolt.setCircle(3, 1, 1).setDepth(8);
-    bolt.setVelocity(direction.x * BOLT.speed, direction.y * BOLT.speed);
-    this.boltExpiry.set(bolt, now + BOLT.lifetimeMs);
+  /** One press of the trigger: a single bolt, or several spread about the aim. */
+  private fireVolley(aim: Phaser.Math.Vector2, now: number): void {
+    const combat = this.heroState.combat;
+    for (const degrees of volleyAngles(combat.boltsPerVolley, combat.volleySpreadDegrees)) {
+      const direction = aim.clone().rotate(Phaser.Math.DegToRad(degrees));
+      // Bolts start at the Hero's centre, so an enemy pressed right up against
+      // the Hero is still hit rather than skipped over.
+      const x = this.hero.x;
+      const y = this.hero.y;
+      const bolt = this.bolts.get(x, y, 'bolt') as Bolt | null;
+      if (!bolt) continue;
+      bolt.enableBody(true, x, y, true, true);
+      bolt.setCircle(3, 1, 1).setDepth(8).setBounce(1);
+      bolt.setVelocity(direction.x * combat.boltSpeed, direction.y * combat.boltSpeed);
+      this.boltInfo.set(bolt, {
+        expiresAt: now + combat.boltLifetimeMs,
+        damage: combat.boltDamage,
+        pierceLeft: combat.pierce,
+        bouncesLeft: combat.ricochets,
+        hit: new Set(),
+      });
+    }
   }
 
   private updateBolts(now: number): void {
-    for (const [bolt, expiresAt] of this.boltExpiry) {
-      if (now >= expiresAt) this.removeBolt(bolt);
+    for (const [bolt, info] of this.boltInfo) {
+      if (now >= info.expiresAt) this.removeBolt(bolt);
     }
   }
 
   private removeBolt(bolt: Bolt): void {
-    this.boltExpiry.delete(bolt);
+    this.boltInfo.delete(bolt);
     bolt.disableBody(true, true);
   }
 
+  /** The physics has already bounced the bolt; it only survives if it has a bounce left. */
+  private boltHitsWall(bolt: Bolt): void {
+    const info = this.boltInfo.get(bolt);
+    if (info && info.bouncesLeft > 0) {
+      info.bouncesLeft -= 1;
+      // After a bounce a bolt may hit the same enemy again.
+      info.hit.clear();
+    } else {
+      this.removeBolt(bolt);
+    }
+  }
+
   private boltHitsEnemy(bolt: Bolt, enemy: Sprite): void {
+    const bolted = this.boltInfo.get(bolt);
     const info = this.enemyInfo.get(enemy);
-    if (!bolt.active || !info) return;
+    if (!bolt.active || !bolted || !info || bolted.hit.has(enemy)) return;
 
     const now = this.time.now;
-    const boltBody = bolt.body as Body;
-    const push = boltBody.velocity.clone().normalize().scale(KNOCKBACK_SPEED);
-    this.removeBolt(bolt);
-
-    // Enemies that are still fading in cannot be hurt either.
-    if (now < info.activeAt) return;
-
-    info.health.damage(BOLT.damage);
-    if (info.health.isDead) {
-      this.defeatEnemy(enemy);
+    // Enemies that are still fading in stop a bolt but cannot be hurt.
+    if (now < info.activeAt) {
+      this.removeBolt(bolt);
       return;
     }
 
-    info.stunnedUntil = now + KNOCKBACK_MS;
-    (enemy.body as Body).setVelocity(push.x, push.y);
-    enemy.setTint(0xffffff).setTintMode(Phaser.TintModes.FILL);
-    this.time.delayedCall(70, () => {
-      if (enemy.active) enemy.clearTint().setTintMode(Phaser.TintModes.MULTIPLY);
-    });
+    const combat = this.heroState.combat;
+    const push = (bolt.body as Body).velocity.clone().normalize();
+    if (bolted.pierceLeft > 0) {
+      bolted.pierceLeft -= 1;
+      bolted.hit.add(enemy);
+    } else {
+      this.removeBolt(bolt);
+    }
+
+    info.brain.burn(now, combat.burnDamagePerSecond, combat.burnDurationMs);
+    info.brain.slow(now, combat.slowSpeedMultiplier, combat.slowDurationMs);
+    if (combat.chainDamageShare > 0) this.chainSpark(enemy, bolted.damage * combat.chainDamageShare);
+    this.damageEnemy(enemy, bolted.damage, push);
+  }
+
+  /** Chain Spark: part of a hit's damage jumps to the nearest other enemy in range. */
+  private chainSpark(from: Sprite, damage: number): void {
+    const range = this.heroState.combat.chainRange;
+    const now = this.time.now;
+    let nearest: Sprite | null = null;
+    let nearestDistance = range;
+    for (const [other, info] of this.enemyInfo) {
+      if (other === from || now < info.activeAt) continue;
+      const distance = Phaser.Math.Distance.Between(from.x, from.y, other.x, other.y);
+      if (distance <= nearestDistance) {
+        nearest = other;
+        nearestDistance = distance;
+      }
+    }
+    if (!nearest) return;
+
+    const spark = this.add.graphics().setDepth(9);
+    spark.lineStyle(1.5, 0xfff3a0, 1).lineBetween(from.x, from.y, nearest.x, nearest.y);
+    this.tweens.add({ targets: spark, alpha: 0, duration: 160, onComplete: () => spark.destroy() });
+    this.damageEnemy(nearest, damage, null);
+  }
+
+  /** Hurts an enemy. A push direction knocks a small enemy back. */
+  private damageEnemy(enemy: Sprite, amount: number, push: Phaser.Math.Vector2 | null): void {
+    const info = this.enemyInfo.get(enemy);
+    if (!info) return;
+
+    const now = this.time.now;
+    info.brain.health.damage(amount);
+    if (info.brain.health.isDead) {
+      this.defeatEnemy(enemy);
+      return;
+    }
+    info.flashUntil = now + HIT_FLASH_MS;
+    if (push && PUSHED_BY_BOLTS[info.brain.kind] && !info.brain.isCommitted) {
+      info.knockedUntil = now + KNOCKBACK_MS;
+      (enemy.body as Body).setVelocity(push.x * KNOCKBACK_SPEED, push.y * KNOCKBACK_SPEED);
+    }
+  }
+
+  // ---- Enemy shots -------------------------------------------------------
+
+  private fireShot(from: Sprite, direction: Point, now: number): void {
+    const shot = this.shots.get(from.x, from.y, 'shot') as Bolt | null;
+    if (!shot) return;
+    shot.enableBody(true, from.x, from.y, true, true);
+    shot.setCircle(3, 2, 2).setDepth(7);
+    shot.setVelocity(direction.x * SHOOTER.shotSpeed, direction.y * SHOOTER.shotSpeed);
+    this.shotExpiry.set(shot, now + SHOOTER.shotLifetimeMs);
+  }
+
+  private updateShots(now: number): void {
+    const fighting = this.room.outcome === 'fighting';
+    for (const [shot, expiresAt] of this.shotExpiry) {
+      if (!fighting || now >= expiresAt) this.removeShot(shot);
+    }
+  }
+
+  private removeShot(shot: Bolt): void {
+    this.shotExpiry.delete(shot);
+    shot.disableBody(true, true);
+  }
+
+  /** A shot is spent on the Hero it hurts; a Dodging Hero lets it fly past. */
+  private shotHitsHero(shot: Bolt): void {
+    if (!shot.active) return;
+    if (this.hurtHero(SHOOTER.shotDamage)) this.removeShot(shot);
   }
 
   // ---- Enemies -------------------------------------------------------------
 
   private updateEnemies(now: number): void {
     const fighting = this.room.outcome === 'fighting';
+    const hero: Point = { x: this.hero.x, y: this.hero.y };
+    this.flow.retarget(cellAt(hero));
+    this.warnings.clear();
+
     for (const [enemy, info] of this.enemyInfo) {
       const body = enemy.body as Body;
       if (!fighting || now < info.activeAt) {
         body.setVelocity(0, 0);
         continue;
       }
-      if (now < info.stunnedUntil) continue;
 
-      const dx = this.hero.x - enemy.x;
-      const dy = this.hero.y - enemy.y;
-      const distance = Math.hypot(dx, dy) || 1;
-      let vx = (dx / distance) * RUSHER.speed;
-      let vy = (dy / distance) * RUSHER.speed;
-
-      // When pressed against a wall, slide along it instead of pushing into it.
-      if (body.blocked.left || body.blocked.right) {
-        vy = (Math.abs(dy) > 4 ? Math.sign(dy) : info.side) * RUSHER.speed;
-      } else if (body.blocked.up || body.blocked.down) {
-        vx = (Math.abs(dx) > 4 ? Math.sign(dx) : info.side) * RUSHER.speed;
+      if (info.brain.sufferBurn(now) > 0 && info.brain.health.isDead) {
+        this.defeatEnemy(enemy);
+        continue;
       }
 
-      body.setVelocity(vx, vy);
-      enemy.setFlipX(dx < 0);
+      const position: Point = { x: enemy.x, y: enemy.y };
+      const action = info.brain.act({
+        now,
+        position,
+        hero,
+        heroInView: lineIsClear(this.layout, position, hero),
+        hitWall: !body.blocked.none,
+      });
+
+      if (action.fire) this.fireShot(enemy, action.fire, now);
+      if (action.spawn) this.spawnFrom(enemy);
+      if (action.warningDirection) this.drawChargeWarning(position, action.warningDirection);
+      this.showEnemyState(enemy, info, action, now);
+
+      if (now < info.knockedUntil) continue;
+      const velocity = this.steer(position, hero, action);
+      body.setVelocity(velocity.x, velocity.y);
+      if (action.motion.kind !== 'hold') enemy.setFlipX(hero.x < enemy.x);
+    }
+  }
+
+  /** Turns what an enemy wants to do into a velocity. */
+  private steer(position: Point, hero: Point, action: EnemyAction): Point {
+    const { motion, speed } = action;
+    if (motion.kind === 'hold') return { x: 0, y: 0 };
+    if (motion.kind === 'dash') return { x: motion.direction.x * speed, y: motion.direction.y * speed };
+
+    let target = hero;
+    if (motion.kind === 'chase' && !lineIsClear(this.layout, position, hero, ENEMY_HALF_WIDTH)) {
+      // Something is in the way: make for the next cell on the way round it.
+      const next = this.flow.next(cellAt(position));
+      if (next) target = cellCentre(next);
+    }
+    const dx = target.x - position.x;
+    const dy = target.y - position.y;
+    const distance = Math.hypot(dx, dy) || 1;
+    const sign = motion.kind === 'retreat' ? -1 : 1;
+    return { x: (dx / distance) * speed * sign, y: (dy / distance) * speed * sign };
+  }
+
+  /** A spawner makes a spawnling beside itself, on the side nearer the Hero. */
+  private spawnFrom(spawner: Sprite): void {
+    const cell = cellAt({ x: spawner.x, y: spawner.y });
+    const at = cellCentre(this.flow.next(cell) ?? cell);
+    this.addEnemy('spawnling', at, SPAWNLING_FADE_MS, spawner);
+    this.room.enemyAdded();
+  }
+
+  /** A red line on the floor along the path a charger is about to take. */
+  private drawChargeWarning(from: Point, direction: Point): void {
+    const reach = (CHARGER.chargeSpeed * CHARGER.chargeMaxMs) / 1000;
+    let length = 0;
+    while (length < reach) {
+      const point = { x: from.x + direction.x * (length + 4), y: from.y + direction.y * (length + 4) };
+      if (isWall(this.layout, cellAt(point))) break;
+      length += 4;
+    }
+    this.warnings
+      .lineStyle(10, 0xff4a3d, 0.22)
+      .lineBetween(from.x, from.y, from.x + direction.x * length, from.y + direction.y * length);
+  }
+
+  /** Colours an enemy by what is happening to it, most urgent first. */
+  private showEnemyState(enemy: Sprite, info: EnemyInfo, action: EnemyAction, now: number): void {
+    enemy.setAngle(action.mood === 'stunned' ? 90 : 0);
+    if (now < info.flashUntil) {
+      enemy.setTint(0xffffff).setTintMode(Phaser.TintModes.FILL);
+    } else if (action.mood === 'warning' && Math.floor(now / 90) % 2 === 0) {
+      enemy.setTint(0xff5a4a).setTintMode(Phaser.TintModes.FILL);
+    } else if (action.mood === 'stunned') {
+      enemy.setTint(0x8f8fb5).setTintMode(Phaser.TintModes.MULTIPLY);
+    } else if (info.brain.isBurning(now)) {
+      enemy.setTint(0xff9a55).setTintMode(Phaser.TintModes.MULTIPLY);
+    } else if (info.brain.isSlowed(now)) {
+      enemy.setTint(0x86c8ff).setTintMode(Phaser.TintModes.MULTIPLY);
+    } else {
+      enemy.clearTint().setTintMode(Phaser.TintModes.MULTIPLY);
     }
   }
 
   private defeatEnemy(enemy: Sprite): void {
+    const info = this.enemyInfo.get(enemy);
+    if (!info) return;
     this.enemyInfo.delete(enemy);
     this.room.enemyDefeated();
+    if (info.parent) this.enemyInfo.get(info.parent)?.brain.broodLost();
 
     // A white ghost of the enemy that puffs outward and fades.
     const puff = this.add
-      .image(enemy.x, enemy.y, 'tiles', FRAME.rusher)
+      .image(enemy.x, enemy.y, 'tiles', enemy.frame.name)
+      .setScale(enemy.scale)
       .setTint(0xffffff)
       .setTintMode(Phaser.TintModes.FILL)
       .setDepth(6);
     this.tweens.add({
       targets: puff,
-      scale: 1.8,
+      scale: enemy.scale * 1.8,
       alpha: 0,
       duration: 200,
       onComplete: () => puff.destroy(),
@@ -396,9 +651,25 @@ export class RoomScene extends Phaser.Scene {
     this.showGrant(grant);
     if (this.run.outcome === 'victory') {
       this.showSummaryAfter(SUMMARY_DELAY_MS.victory);
+    } else if (this.run.boonOffer) {
+      // The Doors stay shut until the player has chosen a Boon.
+      this.time.delayedCall(BOON_OFFER_DELAY_MS, () => {
+        this.choosingBoon = true;
+      });
     } else {
       this.time.delayedCall(DOORS_OPEN_DELAY_MS, () => this.openDoors());
     }
+  }
+
+  /** The player picked a Boon card. */
+  private boonChosen(id: BoonId): void {
+    if (!this.choosingBoon || !this.run.boonOffer?.some((boon) => boon.id === id)) return;
+    this.run.chooseBoon(id);
+    this.choosingBoon = false;
+
+    const text = `${BOON_INFO[id].name}  Lv ${this.run.boons.level(id)}`;
+    this.floatLabel(text, BOON_COLOUR, 0);
+    this.time.delayedCall(DOOR_SWING_MS, () => this.openDoors());
   }
 
   private showGrant(grant: RewardGrant): void {
@@ -408,19 +679,22 @@ export class RoomScene extends Phaser.Scene {
       const text = grant.health > 0 ? `+${grant.health} health` : 'Health already full';
       lines.push({ text, colour: REWARD_LOOK.healing.colour });
     }
-    lines.forEach((line, i) => {
-      // Keep the words inside the Room when the Hero is against a wall.
-      const x = Phaser.Math.Clamp(this.hero.x, 40, ROOM_WIDTH - 40);
-      const y = Math.max(TILE + 18, this.hero.y - 12) + i * 10;
-      const label = this.addLabel(x, y, line.text, line.colour, 9);
-      this.tweens.add({
-        targets: label,
-        y: y - 16,
-        alpha: { from: 1, to: 0 },
-        duration: 1500,
-        ease: 'Cubic.easeIn',
-        onComplete: () => label.destroy(),
-      });
+    lines.forEach((line, i) => this.floatLabel(line.text, line.colour, i));
+  }
+
+  /** Words that rise from the Hero and fade. */
+  private floatLabel(text: string, colour: string, line: number): void {
+    // Keep the words inside the Room when the Hero is against a wall.
+    const x = Phaser.Math.Clamp(this.hero.x, 50, ROOM_WIDTH - 50);
+    const y = Math.max(TILE + 18, this.hero.y - 12) + line * 10;
+    const label = this.addLabel(x, y, text, colour, 9);
+    this.tweens.add({
+      targets: label,
+      y: y - 16,
+      alpha: { from: 1, to: 0 },
+      duration: 1500,
+      ease: 'Cubic.easeIn',
+      onComplete: () => label.destroy(),
     });
   }
 
@@ -525,12 +799,10 @@ export class RoomScene extends Phaser.Scene {
       enemiesLeft: this.room.enemiesLeft,
       gold: this.run.totalGold,
       doorsOpen: this.doorsReady && !this.leaving,
+      boons: this.run.boons.held,
+      boonOffer: this.choosingBoon ? this.run.boonOffer : null,
       summary: this.summaryVisible ? this.run.summary : null,
     };
     this.registry.set(HUD_KEY, snapshot);
   }
-}
-
-function cellCentre(cell: Cell): { x: number; y: number } {
-  return { x: cell.col * TILE + TILE / 2, y: cell.row * TILE + TILE / 2 };
 }

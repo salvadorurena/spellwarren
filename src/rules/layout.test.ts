@@ -153,7 +153,7 @@ describe('the test drawing', () => {
     expect(layout.floorCells).toHaveLength((ROOM_COLS - 2) * (ROOM_ROWS - 2));
     expect(narrowCells(layout)).toEqual([]);
     expect(cellsBeyondASqueeze(layout)).toEqual([]);
-    expect(enemyStartCells(layout).length).toBeGreaterThanOrEqual(ENCOUNTER.maxEnemies);
+    expect(enemyStartCells(layout).length).toBeGreaterThanOrEqual(ENCOUNTER.maxBudget);
     expect(walledShare(layout)).toBe(0);
   });
 });
@@ -279,13 +279,13 @@ describe('rule 4: the largest group of enemies has somewhere to start', () => {
     rows[12] = `${chamberRow.slice(0, 13)}H${chamberRow.slice(14)}`;
     const cramped = unchecked('test', rows);
     expect(cramped.floorCells).toHaveLength(45);
-    expect(enemyStartCells(cramped).length).toBeLessThan(ENCOUNTER.maxEnemies);
+    expect(enemyStartCells(cramped).length).toBeLessThan(ENCOUNTER.maxBudget);
   });
 
   it('holds for every Layout', () => {
     for (const layout of LAYOUTS) {
       expect(enemyStartCells(layout).length, layout.name).toBeGreaterThanOrEqual(
-        ENCOUNTER.maxEnemies,
+        ENCOUNTER.maxBudget,
       );
     }
   });

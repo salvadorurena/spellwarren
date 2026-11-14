@@ -1,3 +1,5 @@
+import type { BoonId, BoonOffer } from './rules/boon';
+import type { EnemyKind } from './rules/enemy';
 import type { Reward } from './rules/reward';
 import type { RunSummary } from './rules/run';
 import { ROOM_COLS, ROOM_ROWS, TILE } from './rules/tuning';
@@ -16,6 +18,10 @@ export const SCREEN_HEIGHT = ROOM_HEIGHT * VIEW_SCALE;
 export const FRAME = {
   hero: 84,
   rusher: 108,
+  shooter: 111,
+  charger: 109,
+  spawner: 122,
+  spawnling: 123,
   wall: 40,
   floor: 48,
   floorSpeckled: 49,
@@ -28,6 +34,33 @@ export const FRAME = {
   blueFlask: 116,
 } as const;
 
+/** How each kind of enemy is drawn: its picture and how large it is beside the Hero. */
+export const ENEMY_LOOK: Record<EnemyKind, { frame: number; scale: number }> = {
+  rusher: { frame: FRAME.rusher, scale: 1 },
+  shooter: { frame: FRAME.shooter, scale: 1 },
+  charger: { frame: FRAME.charger, scale: 1.25 },
+  spawner: { frame: FRAME.spawner, scale: 1.6 },
+  spawnling: { frame: FRAME.spawnling, scale: 0.8 },
+};
+
+/** The picture on each Boon's card. */
+export const BOON_FRAME: Record<BoonId, number> = {
+  swiftCasting: 129,
+  heavyBolts: 117,
+  piercingBolts: 105,
+  splitBolt: 118,
+  ricochet: 101,
+  chainSpark: 130,
+  burningBolts: 115,
+  frostBolts: 116,
+  farReach: 106,
+  fleetFoot: 114,
+  quickRecovery: 113,
+  dodgeBlast: 119,
+};
+
+export const BOON_COLOUR = '#9be7ff';
+
 export const FONT_FAMILY = '"Trebuchet MS", "Segoe UI", system-ui, sans-serif';
 
 export const GOLD_COLOUR = '#ffd35a';
@@ -36,8 +69,7 @@ export const GOLD_COLOUR = '#ffd35a';
 export const REWARD_LOOK: Record<Reward, { frame: number; label: string; colour: string }> = {
   gold: { frame: FRAME.chest, label: 'Gold', colour: GOLD_COLOUR },
   healing: { frame: FRAME.redFlask, label: 'Healing', colour: '#ff8a8a' },
-  // A stand-in until Boons exist.
-  boon: { frame: FRAME.blueFlask, label: 'Boon', colour: '#9be7ff' },
+  boon: { frame: 131, label: 'Boon', colour: BOON_COLOUR },
 };
 
 /** What the Room tells the heads-up display each frame. */
@@ -54,6 +86,10 @@ export interface HudSnapshot {
   /** All the player's banked Gold. */
   gold: number;
   doorsOpen: boolean;
+  /** The Boons the Hero holds this Run. */
+  boons: readonly BoonOffer[];
+  /** The Boons to choose one from, while the choice is on screen. */
+  boonOffer: readonly BoonOffer[] | null;
   /** Set once the Run has ended and its summary should be on screen. */
   summary: RunSummary | null;
 }
@@ -62,3 +98,6 @@ export const HUD_KEY = 'hud';
 
 /** Where the game registry keeps the Bank, which outlives every Run. */
 export const BANK_KEY = 'bank';
+
+/** Sent on the game's events, with the Boon's id, when the player picks a Boon card. */
+export const BOON_CHOSEN_EVENT = 'boon-chosen';

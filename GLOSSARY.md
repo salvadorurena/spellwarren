@@ -37,6 +37,32 @@ _Avoid_: Exit, path, portal
 **Boss**:
 The single powerful enemy in the final Room of a Run. Defeating it is victory.
 
+### Enemies
+
+**Rusher**:
+An enemy that runs straight at the Hero.
+_Avoid_: Slime, melee enemy, chaser
+
+**Shooter**:
+An enemy that keeps its distance from the Hero and fires slow shots.
+_Avoid_: Archer, caster, ranged enemy
+
+**Shot**:
+What a Shooter fires. The Hero fires bolts, never shots.
+_Avoid_: Bullet, projectile, enemy bolt
+
+**Charger**:
+An enemy that shows a warning and then charges in a straight line. Charging into a wall stuns it.
+_Avoid_: Dasher, bull
+
+**Spawner**:
+A slow, tough enemy that makes Spawnlings until it is defeated.
+_Avoid_: Summoner, nest, hive
+
+**Spawnling**:
+A small, weak enemy made by a Spawner during a fight. It must be defeated for the Room to be cleared.
+_Avoid_: Minion, add, child
+
 ### Rewards
 
 **Reward**:

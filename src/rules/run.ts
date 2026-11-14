@@ -1,4 +1,5 @@
 import type { Bank } from './bank';
+import { baseCombatNumbers, Boons, type BoonId, type BoonOffer, type CombatNumbers } from './boon';
 import { HeroState } from './hero';
 import { LAYOUTS, type Layout } from './layout';
 import { AVAILABLE_REWARDS, goldAtDepth, rollDoorRewards, type Reward } from './reward';
@@ -94,8 +95,10 @@ export function rollDoorColumns(count: number, rng: Rng): number[] {
  * Hero dies and which Door the Hero walks into.
  */
 export class Run {
+  /** The Boons taken during this Run. They are lost when it ends. */
+  readonly boons = new Boons();
   /** The Hero for this Run. Health carries from Room to Room. */
-  readonly hero = new HeroState();
+  readonly hero = new HeroState(() => this.combat);
   /** The source of all randomness in this Run. */
   readonly rng: Rng;
 
@@ -108,6 +111,7 @@ export class Run {
   private cleared = false;
   private result: RunOutcome = 'underway';
   private banked = 0;
+  private offer: readonly BoonOffer[] | null = null;
 
   constructor(options: RunOptions) {
     this.bank = options.bank;
@@ -118,6 +122,11 @@ export class Run {
     // The first Room's Reward is always Gold.
     this.current = this.planRoom(1, 'gold', undefined);
     this.exits = this.rollDoors();
+  }
+
+  /** The Hero's combat numbers with this Run's Boons applied. */
+  get combat(): CombatNumbers {
+    return this.boons.apply(baseCombatNumbers());
   }
 
   /** The Room the Hero is in. */
@@ -141,9 +150,26 @@ export class Run {
     return this.exits;
   }
 
-  /** True once the current Room is cleared and the Hero may pick a Door. */
+  /**
+   * True once the current Room is cleared and the Hero may pick a Door.
+   * After a Boon Reward the Doors wait until a Boon has been chosen.
+   */
   get doorsOpen(): boolean {
-    return this.cleared && this.result === 'underway';
+    return this.cleared && this.result === 'underway' && this.offer === null;
+  }
+
+  /** The Boons to choose one from, while a Boon Reward is waiting to be taken. */
+  get boonOffer(): readonly BoonOffer[] | null {
+    return this.offer;
+  }
+
+  /** Takes one of the offered Boons, which lets the Doors open. */
+  chooseBoon(id: BoonId): void {
+    if (!this.offer?.some((boon) => boon.id === id)) {
+      throw new Error('That Boon is not on offer');
+    }
+    this.boons.take(id);
+    this.offer = null;
   }
 
   /** Gold Banked during this Run alone. */
@@ -170,6 +196,7 @@ export class Run {
   /**
    * Call when every enemy in the current Room is defeated. Grants the
    * Room's Reward on the spot: Gold is Banked and Healing restores health.
+   * A Boon Reward puts three Boons on offer, to be taken with `chooseBoon`.
    * Clearing the Boss Room wins the Run; any other Room opens its Doors.
    * Returns what was granted, or null if there was nothing to clear.
    */
@@ -182,7 +209,12 @@ export class Run {
     let health = 0;
     if (reward === 'gold') gold = goldAtDepth(depth);
     if (reward === 'healing') health = this.hero.health.heal(REWARD.healing);
-    // 'boon' will be handled here once Boons exist.
+    if (reward === 'boon') {
+      const offer = this.boons.rollOffer(this.rng);
+      // With every Boon at its highest level there is nothing to offer, so the Room pays Gold.
+      if (offer.length > 0) this.offer = offer;
+      else gold = goldAtDepth(depth);
+    }
     if (isBossRoom) gold += REWARD.bossRoomGold;
 
     if (gold > 0) {
@@ -190,6 +222,7 @@ export class Run {
       this.banked += gold;
     }
     if (isBossRoom) this.result = 'victory';
+    this.exits = this.withoutWastedHealing(this.exits);
     return { reward, gold, health };
   }
 
@@ -205,6 +238,20 @@ export class Run {
     this.current = door.leadsTo;
     this.cleared = false;
     this.exits = this.rollDoors();
+  }
+
+  /**
+   * A Door offering Healing to a Hero at full health is a wasted choice.
+   * If a kind of Reward is not on any Door, it takes that Door instead.
+   */
+  private withoutWastedHealing(doors: readonly Door[]): readonly Door[] {
+    if (this.hero.health.current < this.hero.health.max) return doors;
+    const shown = new Set(doors.map((door) => door.leadsTo.reward));
+    const spare = this.rewards.find((reward) => reward !== 'healing' && !shown.has(reward));
+    if (!spare) return doors;
+    return doors.map((door) =>
+      door.leadsTo.reward === 'healing' ? { ...door, leadsTo: { ...door.leadsTo, reward: spare } } : door,
+    );
   }
 
   private planRoom(depth: number, reward: Reward | null, previous: Layout | undefined): RoomPlan {

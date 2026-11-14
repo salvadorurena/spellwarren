@@ -7,11 +7,8 @@ import { DOOR_OFFER, REWARD } from './tuning';
  */
 export type Reward = 'gold' | 'healing' | 'boon';
 
-/**
- * The Rewards a Run can currently give. Boons do not exist yet; when they
- * do, add 'boon' to this list.
- */
-export const AVAILABLE_REWARDS: readonly Reward[] = ['gold', 'healing'];
+/** The Rewards a Run can give. */
+export const AVAILABLE_REWARDS: readonly Reward[] = ['gold', 'healing', 'boon'];
 
 /** How much Gold a Gold Reward is worth in a Room at the given Depth. */
 export function goldAtDepth(depth: number): number {

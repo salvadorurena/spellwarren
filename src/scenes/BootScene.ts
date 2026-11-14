@@ -22,6 +22,14 @@ export class BootScene extends Phaser.Scene {
     orb.generateTexture('bolt', 8, 8);
     orb.destroy();
 
+    // An enemy's shot: a hot orange orb, so it is never mistaken for a bolt.
+    const shot = this.make.graphics({ x: 0, y: 0 }, false);
+    shot.fillStyle(0x7a1f1f).fillCircle(5, 5, 5);
+    shot.fillStyle(0xff6a3d).fillCircle(5, 5, 4);
+    shot.fillStyle(0xffe08a).fillCircle(5, 5, 2);
+    shot.generateTexture('shot', 10, 10);
+    shot.destroy();
+
     // Banked Gold outlives every Run, so it is kept by the game rather than by a Room.
     this.registry.set(BANK_KEY, new Bank());
 
