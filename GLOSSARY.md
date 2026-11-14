@@ -37,6 +37,14 @@ _Avoid_: Exit, path, portal
 **Boss**:
 The single powerful enemy in the final Room of a Run. Defeating it is victory.
 
+**Boss Room**:
+The final Room of a Run, one Depth past the last ordinary Room, where the Boss is fought. No Door leads out of it.
+_Avoid_: Final level, arena
+
+**Bolt**:
+What the Hero fires. Enemies fire Shots, never bolts.
+_Avoid_: Shot, spell, bullet, projectile
+
 ### Enemies
 
 **Rusher**:
@@ -72,6 +80,10 @@ _Avoid_: Loot, drop, prize
 **Boon**:
 A power gained during a Run that lasts only until that Run ends. The player picks one from three offered, and picking the same Boon again makes it stronger.
 _Avoid_: Upgrade, power-up, perk, item
+
+**Boon level**:
+How many times the Hero has picked the same Boon in this Run, which sets how strong it is. Every Boon has the same highest level, and a Boon at it is no longer offered. This is the only thing in the game called a level.
+_Avoid_: Rank, tier, stack
 
 **Healing**:
 A Reward that restores some of the Hero's health. It is the only way health is ever restored during a Run.
