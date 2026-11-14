@@ -19,8 +19,11 @@ export class Health {
     this.value = Math.max(0, this.value - Math.max(0, amount));
   }
 
-  heal(amount: number): void {
-    if (this.isDead) return;
+  /** Restores health, never above the maximum. Returns how much was actually restored. */
+  heal(amount: number): number {
+    if (this.isDead) return 0;
+    const before = this.value;
     this.value = Math.min(this.max, this.value + Math.max(0, amount));
+    return this.value - before;
   }
 }

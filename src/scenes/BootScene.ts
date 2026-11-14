@@ -1,7 +1,9 @@
 import Phaser from 'phaser';
+import { Bank } from '../rules/bank';
 import { TILE } from '../rules/tuning';
+import { BANK_KEY } from '../view';
 
-/** Loads the art, then hands over to the first Room. */
+/** Loads the art and opens the Bank, then hands over to the first Room. */
 export class BootScene extends Phaser.Scene {
   constructor() {
     super('Boot');
@@ -19,6 +21,9 @@ export class BootScene extends Phaser.Scene {
     orb.fillStyle(0xffffff).fillCircle(4, 4, 1.5);
     orb.generateTexture('bolt', 8, 8);
     orb.destroy();
+
+    // Banked Gold outlives every Run, so it is kept by the game rather than by a Room.
+    this.registry.set(BANK_KEY, new Bank());
 
     this.scene.start('Room');
   }

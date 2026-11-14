@@ -8,6 +8,12 @@ export const TILE = 16;
 export const ROOM_COLS = 27;
 export const ROOM_ROWS = 15;
 
+/**
+ * Doors sit in the top wall (row 0) at these columns. Every Layout keeps
+ * the floor beneath them clear, and the Hero enters from the bottom.
+ */
+export const DOOR_COLUMNS = [6, 13, 20] as const;
+
 export const HERO = {
   maxHealth: 6,
   speed: 95,
@@ -37,7 +43,29 @@ export const RUSHER = {
 export const ENCOUNTER = {
   baseEnemies: 4,
   extraEnemiesPerDepth: 1,
-  maxEnemies: 12,
+  /** High enough that the Boss Room, one Depth past the last Room, is the toughest. */
+  maxEnemies: 14,
   /** Enemies never start closer to the Hero than this many tiles. */
   minSpawnDistanceTiles: 6,
+} as const;
+
+export const RUN = {
+  /** Rooms in the chain before the Boss Room, which sits one Depth deeper. */
+  rooms: 10,
+} as const;
+
+/** How many Doors lead out of a cleared Room. */
+export const DOOR_OFFER = {
+  minDoors: 2,
+  maxDoors: 3,
+} as const;
+
+export const REWARD = {
+  /** A Gold Reward is worth goldBase + goldPerDepth x the Room's Depth. */
+  goldBase: 10,
+  goldPerDepth: 2,
+  /** Health restored by a Healing Reward. */
+  healing: 2,
+  /** Gold Banked for clearing the Boss Room, which has no Reward of its own. */
+  bossRoomGold: 50,
 } as const;

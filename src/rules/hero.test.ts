@@ -16,6 +16,15 @@ describe('Health', () => {
     expect(other.current).toBe(5);
   });
 
+  it('reports how much health was actually restored', () => {
+    const health = new Health(6);
+    health.damage(3);
+    expect(health.heal(2)).toBe(2);
+    expect(health.heal(2)).toBe(1);
+    expect(health.heal(2)).toBe(0);
+    expect(health.current).toBe(6);
+  });
+
   it('cannot be healed back from death', () => {
     const health = new Health(3);
     health.damage(3);

@@ -4,7 +4,7 @@ A real-time, top-down fantasy dungeon roguelite that runs in the browser.
 
 **Play it:** https://salvadorurena.github.io/spellwarren/
 
-The game is in early development. Right now it is a single Room: a mage fighting slimes, with a tougher Room after each one you clear.
+The game is in early development. Right now a Run is a chain of ten Rooms and a stand-in Boss Room. After each Room you clear, you pick a Door, and each Door shows the Reward its Room gives: Gold or Healing. There is one enemy type so far, and Gold cannot be spent yet.
 
 ## Controls
 
@@ -14,7 +14,8 @@ The game is in early development. Right now it is a single Room: a mage fighting
 | Aim | Mouse |
 | Fire | Hold left click |
 | Dodge | Space |
-| Continue | Enter |
+| Choose a Door | Walk into it |
+| New Run | Enter |
 
 Desktop browsers with a keyboard and mouse only.
 

@@ -8,11 +8,15 @@ import { ENCOUNTER, ROOM_COLS, ROOM_ROWS } from './tuning';
 const wallRow = '#'.repeat(ROOM_COLS);
 const openRow = `#${'.'.repeat(ROOM_COLS - 2)}#`;
 
+/** The Hero enters from the bottom, so the test Room starts the Hero on a low row. */
+const HERO_ROW = ROOM_ROWS - 3;
+const heroRow = `#H${'.'.repeat(ROOM_COLS - 3)}#`;
+
 function drawing(overrides: Record<number, string> = {}): string[] {
   const rows = Array.from({ length: ROOM_ROWS }, (_, row) =>
     row === 0 || row === ROOM_ROWS - 1 ? wallRow : openRow,
   );
-  rows[7] = `#H${'.'.repeat(ROOM_COLS - 3)}#`;
+  rows[HERO_ROW] = heroRow;
   for (const [row, text] of Object.entries(overrides)) rows[Number(row)] = text;
   return rows;
 }
@@ -28,7 +32,7 @@ describe('Layouts', () => {
 
   it('accepts a simple enclosed Room', () => {
     const layout = parseLayout('test', drawing());
-    expect(layout.heroStart).toEqual({ col: 1, row: 7 });
+    expect(layout.heroStart).toEqual({ col: 1, row: HERO_ROW });
     expect(layout.floorCells).toHaveLength((ROOM_COLS - 2) * (ROOM_ROWS - 2));
   });
 
@@ -39,10 +43,10 @@ describe('Layouts', () => {
   });
 
   it('rejects a Room with no Hero start, or two', () => {
-    expect(() => parseLayout('test', drawing({ 7: openRow }))).toThrow(/no Hero start/);
-    expect(() =>
-      parseLayout('test', drawing({ 8: `#H${'.'.repeat(ROOM_COLS - 3)}#` })),
-    ).toThrow(/more than one Hero start/);
+    expect(() => parseLayout('test', drawing({ [HERO_ROW]: openRow }))).toThrow(/no Hero start/);
+    expect(() => parseLayout('test', drawing({ [HERO_ROW + 1]: heroRow }))).toThrow(
+      /more than one Hero start/,
+    );
   });
 
   it('rejects floor the Hero could never reach', () => {

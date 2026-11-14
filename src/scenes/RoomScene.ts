@@ -1,22 +1,33 @@
 import Phaser from 'phaser';
 import { rollEncounter } from '../rules/encounter';
 import { Health } from '../rules/health';
-import { HeroState } from '../rules/hero';
-import { LAYOUTS, type Cell, type Layout } from '../rules/layout';
+import type { HeroState } from '../rules/hero';
+import type { Bank } from '../rules/bank';
+import type { Cell, Layout } from '../rules/layout';
 import { Rng } from '../rules/rng';
 import { RoomState } from '../rules/room';
-import { BOLT, DODGE, HERO, RUSHER, TILE } from '../rules/tuning';
-import { FRAME, HUD_KEY, ROOM_HEIGHT, ROOM_WIDTH, VIEW_SCALE, type HudSnapshot } from '../view';
+import { Run, type Door, type RewardGrant } from '../rules/run';
+import { BOLT, DODGE, HERO, RUN, RUSHER, TILE } from '../rules/tuning';
+import {
+  BANK_KEY,
+  FONT_FAMILY,
+  FRAME,
+  GOLD_COLOUR,
+  HUD_KEY,
+  REWARD_LOOK,
+  ROOM_HEIGHT,
+  ROOM_WIDTH,
+  VIEW_SCALE,
+  type HudSnapshot,
+} from '../view';
 
 type Sprite = Phaser.Physics.Arcade.Sprite;
 type Bolt = Phaser.Physics.Arcade.Image;
 type Body = Phaser.Physics.Arcade.Body;
 
 export interface RoomSceneData {
-  /** Position of this Room in the chain; the first Room is Depth 1. */
-  depth?: number;
-  /** The Hero carried over from the previous Room, with whatever health is left. */
-  hero?: HeroState;
+  /** The Run this Room belongs to. Left out to start a new Run. */
+  run?: Run;
 }
 
 interface EnemyInfo {
@@ -33,11 +44,28 @@ const SPAWN_FADE_MS = 700;
 const KNOCKBACK_MS = 110;
 const KNOCKBACK_SPEED = 130;
 
-/** One Room: the Hero fights a group of enemies until one side is gone. */
+/** After a Room is cleared its Reward is shown for this long before the Doors open. */
+const DOORS_OPEN_DELAY_MS = 700;
+const DOOR_SWING_MS = 130;
+/** How long the Hero takes to step through a Door while the Room fades out. */
+const LEAVE_MS = 240;
+const ENTER_FADE_MS = 200;
+/** The Run summary waits this long, so the last moment of the Run can be seen. */
+const SUMMARY_DELAY_MS = { death: 700, victory: 1300 } as const;
+
+/** Every tile that stands in the way, whichever way a Door is hanging. */
+const SOLID_FRAMES = [FRAME.wall, FRAME.doorShut, FRAME.doorAjar, FRAME.doorOpen];
+
+/** One Room of a Run: the Hero fights a group of enemies, then leaves by a Door. */
 export class RoomScene extends Phaser.Scene {
-  private depth = 1;
+  private run!: Run;
   private heroState!: HeroState;
   private room!: RoomState;
+  /** True once the open Doors can be walked into. */
+  private doorsReady = false;
+  /** True while the Hero is stepping through a Door. */
+  private leaving = false;
+  private summaryVisible = false;
 
   private hero!: Sprite;
   private walls!: Phaser.Tilemaps.TilemapLayer;
@@ -54,17 +82,27 @@ export class RoomScene extends Phaser.Scene {
   }
 
   init(data: RoomSceneData): void {
-    this.depth = data.depth ?? 1;
-    this.heroState = data.hero ?? new HeroState();
+    this.run = data.run ?? this.startRun();
+    this.heroState = this.run.hero;
+    this.doorsReady = false;
+    this.leaving = false;
+    this.summaryVisible = false;
     this.enemyInfo.clear();
     this.boltExpiry.clear();
   }
 
+  /** A new Run: Depth 1 and full health, with the banked Gold of every Run before it. */
+  private startRun(): Run {
+    const bank = this.registry.get(BANK_KEY) as Bank;
+    return new Run({ bank, rng: new Rng(Date.now()) });
+  }
+
   create(): void {
-    const layout = LAYOUTS[0] as Layout;
-    const rng = new Rng(Date.now());
+    const layout = this.run.room.layout;
+    const rng = this.run.rng;
 
     this.cameras.main.setZoom(VIEW_SCALE).centerOn(ROOM_WIDTH / 2, ROOM_HEIGHT / 2);
+    this.cameras.main.fadeIn(ENTER_FADE_MS);
     this.input.mouse?.disableContextMenu();
 
     this.buildWalls(layout, rng);
@@ -83,21 +121,22 @@ export class RoomScene extends Phaser.Scene {
     };
 
     if (!this.scene.isActive('Hud')) this.scene.launch('Hud');
+    if (this.room.outcome === 'cleared') this.roomCleared();
     this.publishHud();
   }
 
   update(): void {
     const now = this.time.now;
-    const outcome = this.room.outcome;
 
-    if (outcome !== 'fighting' && Phaser.Input.Keyboard.JustDown(this.keys.confirm)) {
-      this.scene.restart(
-        outcome === 'cleared' ? { depth: this.depth + 1, hero: this.heroState } : {},
-      );
+    if (this.summaryVisible && Phaser.Input.Keyboard.JustDown(this.keys.confirm)) {
+      this.scene.restart({});
       return;
     }
 
-    this.updateHero(now);
+    if (!this.leaving) {
+      this.updateHero(now);
+      this.checkDoors();
+    }
     this.updateBolts(now);
     this.updateEnemies(now);
     this.publishHud();
@@ -106,8 +145,10 @@ export class RoomScene extends Phaser.Scene {
   // ---- Building the Room -------------------------------------------------
 
   private buildWalls(layout: Layout, rng: Rng): void {
-    const data = layout.walls.map((row) =>
-      row.map((isWall) => {
+    const doorColumns = new Set(this.run.doors.map((door) => door.column));
+    const data = layout.walls.map((row, rowIndex) =>
+      row.map((isWall, col) => {
+        if (rowIndex === 0 && doorColumns.has(col)) return FRAME.doorShut;
         if (isWall) return FRAME.wall;
         const roll = rng.next();
         if (roll < 0.08) return FRAME.floorSpeckled;
@@ -122,7 +163,7 @@ export class RoomScene extends Phaser.Scene {
     if (!(layer instanceof Phaser.Tilemaps.TilemapLayer)) {
       throw new Error('The Room could not be drawn');
     }
-    layer.setCollision(FRAME.wall);
+    layer.setCollision(SOLID_FRAMES);
     this.walls = layer;
   }
 
@@ -139,7 +180,7 @@ export class RoomScene extends Phaser.Scene {
   }
 
   private createEnemies(layout: Layout, rng: Rng): void {
-    const spawns = rollEncounter(layout, this.depth, rng);
+    const spawns = rollEncounter(layout, this.run.depth, rng);
     this.room = new RoomState(spawns.length);
     this.enemies = this.physics.add.group();
 
@@ -234,6 +275,8 @@ export class RoomScene extends Phaser.Scene {
     this.cameras.main.shake(140, 0.0015);
     if (result === 'dead') {
       this.room.heroDied();
+      this.run.heroDied();
+      this.showSummaryAfter(SUMMARY_DELAY_MS.death);
       this.hero.setTint(0x555555).setTintMode(Phaser.TintModes.MULTIPLY).setAlpha(1);
       this.hero.setAngle(90);
     }
@@ -242,8 +285,10 @@ export class RoomScene extends Phaser.Scene {
   // ---- Bolts -------------------------------------------------------------
 
   private fireBolt(direction: Phaser.Math.Vector2, now: number): void {
-    const x = this.hero.x + direction.x * 8;
-    const y = this.hero.y + direction.y * 8;
+    // Bolts start at the Hero's centre, so an enemy pressed right up against
+    // the Hero is still hit rather than skipped over.
+    const x = this.hero.x;
+    const y = this.hero.y;
     const bolt = this.bolts.get(x, y, 'bolt') as Bolt | null;
     if (!bolt) return;
     bolt.enableBody(true, x, y, true, true);
@@ -337,6 +382,134 @@ export class RoomScene extends Phaser.Scene {
       onComplete: () => puff.destroy(),
     });
     enemy.destroy();
+
+    if (this.room.outcome === 'cleared') this.roomCleared();
+  }
+
+  // ---- Rewards and Doors ---------------------------------------------------
+
+  /** The Room's Reward is granted the moment it is cleared; then the Doors open. */
+  private roomCleared(): void {
+    const grant = this.run.roomCleared();
+    if (!grant) return;
+
+    this.showGrant(grant);
+    if (this.run.outcome === 'victory') {
+      this.showSummaryAfter(SUMMARY_DELAY_MS.victory);
+    } else {
+      this.time.delayedCall(DOORS_OPEN_DELAY_MS, () => this.openDoors());
+    }
+  }
+
+  private showGrant(grant: RewardGrant): void {
+    const lines: { text: string; colour: string }[] = [];
+    if (grant.gold > 0) lines.push({ text: `+${grant.gold} Gold`, colour: GOLD_COLOUR });
+    if (grant.reward === 'healing') {
+      const text = grant.health > 0 ? `+${grant.health} health` : 'Health already full';
+      lines.push({ text, colour: REWARD_LOOK.healing.colour });
+    }
+    lines.forEach((line, i) => {
+      // Keep the words inside the Room when the Hero is against a wall.
+      const x = Phaser.Math.Clamp(this.hero.x, 40, ROOM_WIDTH - 40);
+      const y = Math.max(TILE + 18, this.hero.y - 12) + i * 10;
+      const label = this.addLabel(x, y, line.text, line.colour, 9);
+      this.tweens.add({
+        targets: label,
+        y: y - 16,
+        alpha: { from: 1, to: 0 },
+        duration: 1500,
+        ease: 'Cubic.easeIn',
+        onComplete: () => label.destroy(),
+      });
+    });
+  }
+
+  private openDoors(): void {
+    for (const door of this.run.doors) {
+      this.walls.putTileAt(FRAME.doorAjar, door.column, 0);
+    }
+    this.time.delayedCall(DOOR_SWING_MS, () => {
+      for (const door of this.run.doors) {
+        this.walls.putTileAt(FRAME.doorOpen, door.column, 0);
+        this.showDoorReward(door);
+      }
+      this.doorsReady = true;
+    });
+  }
+
+  /** Under each open Door: an icon and a word for the Reward of the Room behind it. */
+  private showDoorReward(door: Door): void {
+    const x = door.column * TILE + TILE / 2;
+    const reward = door.leadsTo.reward;
+    const shown: Phaser.GameObjects.GameObject[] = [];
+
+    if (reward) {
+      const look = REWARD_LOOK[reward];
+      const icon = this.add.image(x, TILE + 9, 'tiles', look.frame).setDepth(3);
+      this.tweens.add({ targets: icon, y: icon.y + 2, duration: 600, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+      shown.push(icon, this.addLabel(x, TILE + 23, look.label, look.colour, 7));
+    } else {
+      shown.push(this.addLabel(x, TILE + 8, 'Boss Room', '#ff9d5c', 8));
+    }
+    this.tweens.add({ targets: shown, alpha: { from: 0, to: 1 }, duration: 200 });
+  }
+
+  /** The Hero picks a Door by walking up into it. */
+  private checkDoors(): void {
+    if (!this.doorsReady || !this.run.doorsOpen || this.heroState.health.isDead) return;
+
+    const body = this.hero.body as Body;
+    const pushingUp = this.keys.up.isDown || body.blocked.up;
+    // Standing against the top wall puts the Hero's middle 3 pixels below it.
+    if (!pushingUp || this.hero.y > TILE + 6) return;
+
+    const door = this.run.doors.find(
+      (d) => Math.abs(this.hero.x - (d.column * TILE + TILE / 2)) <= TILE / 2,
+    );
+    if (door) this.leaveThrough(door);
+  }
+
+  private leaveThrough(door: Door): void {
+    this.leaving = true;
+    const body = this.hero.body as Body;
+    body.setVelocity(0, 0);
+    body.enable = false;
+
+    this.hero.clearTint().setTintMode(Phaser.TintModes.MULTIPLY);
+    this.tweens.add({
+      targets: this.hero,
+      x: door.column * TILE + TILE / 2,
+      y: TILE / 2 + 2,
+      alpha: 0,
+      duration: LEAVE_MS,
+    });
+    this.cameras.main.fadeOut(LEAVE_MS, 0, 0, 0);
+    this.cameras.main.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () => {
+      this.run.enter(door);
+      this.scene.restart({ run: this.run });
+    });
+  }
+
+  private showSummaryAfter(delayMs: number): void {
+    this.time.delayedCall(delayMs, () => {
+      this.summaryVisible = true;
+    });
+  }
+
+  /** Words drawn in the Room. They are rendered finely enough to stay sharp when scaled up. */
+  private addLabel(x: number, y: number, text: string, colour: string, size: number): Phaser.GameObjects.Text {
+    return this.add
+      .text(x, y, text, {
+        fontFamily: FONT_FAMILY,
+        fontStyle: 'bold',
+        fontSize: `${size}px`,
+        color: colour,
+        stroke: '#2b1d14',
+        strokeThickness: 2,
+        resolution: VIEW_SCALE,
+      })
+      .setOrigin(0.5)
+      .setDepth(20);
   }
 
   // ---- Heads-up display --------------------------------------------------
@@ -346,9 +519,13 @@ export class RoomScene extends Phaser.Scene {
       health: this.heroState.health.current,
       maxHealth: this.heroState.health.max,
       dodgeReadiness: this.heroState.dodgeReadiness(this.time.now),
-      depth: this.depth,
+      depth: this.run.depth,
+      roomCount: RUN.rooms,
+      isBossRoom: this.run.room.isBossRoom,
       enemiesLeft: this.room.enemiesLeft,
-      outcome: this.room.outcome,
+      gold: this.run.totalGold,
+      doorsOpen: this.doorsReady && !this.leaving,
+      summary: this.summaryVisible ? this.run.summary : null,
     };
     this.registry.set(HUD_KEY, snapshot);
   }
